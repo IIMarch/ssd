@@ -1,17 +1,17 @@
+# coding: UTF-8
 import torch
 from torchvision import transforms
 import cv2
 import numpy as np
 import types
 from numpy import random
-
+from cython_bbox import bbox_overlaps
 
 def intersect(box_a, box_b):
     max_xy = np.minimum(box_a[:, 2:], box_b[2:])
     min_xy = np.maximum(box_a[:, :2], box_b[:2])
     inter = np.clip((max_xy - min_xy), a_min=0, a_max=np.inf)
     return inter[:, 0] * inter[:, 1]
-
 
 def jaccard_numpy(box_a, box_b):
     """Compute the jaccard overlap of two sets of boxes.  The jaccard overlap
@@ -82,6 +82,10 @@ class SubtractMeans(object):
 class ToAbsoluteCoords(object):
     def __call__(self, image, boxes=None, labels=None):
         height, width, channels = image.shape
+
+        if boxes.shape[0] == 0:
+          return image, boxes, labels
+
         boxes[:, 0] *= width
         boxes[:, 2] *= width
         boxes[:, 1] *= height
@@ -93,6 +97,10 @@ class ToAbsoluteCoords(object):
 class ToPercentCoords(object):
     def __call__(self, image, boxes=None, labels=None):
         height, width, channels = image.shape
+
+        if boxes.shape[0] == 0:
+          return image, boxes, labels
+
         boxes[:, 0] /= width
         boxes[:, 2] /= width
         boxes[:, 1] /= height
@@ -342,8 +350,9 @@ class RandomMirror(object):
         _, width, _ = image.shape
         if random.randint(2):
             image = image[:, ::-1]
-            boxes = boxes.copy()
-            boxes[:, 0::2] = width - boxes[:, 2::-2]
+            if boxes.shape[0] != 0:
+              boxes = boxes.copy()
+              boxes[:, 0::2] = width - boxes[:, 2::-2]
         return image, boxes, classes
 
 
@@ -395,6 +404,155 @@ class PhotometricDistort(object):
             distort = Compose(self.pd[1:])
         im, boxes, labels = distort(im, boxes, labels)
         return self.rand_light_noise(im, boxes, labels)
+
+class RandomResize(object):
+    def __init__(self, min_val=1.0, max_val=1.0):
+        self.min_val = min_val
+        self.max_val = max_val
+
+    def __call__(self, image, boxes=None, labels=None):
+        scale = np.random.uniform(low=self.min_val, high=self.max_val, size=(1,))[0]
+        image = cv2.resize(image, (0,0), fx=scale, fy=scale)
+        return image, boxes, labels
+
+class PadToBoundingBox(object):
+    def __init__(self, crop_height=512, crop_width=512, pad_value=[128.0, 128.0, 128.0]):
+        self.crop_height = crop_height
+        self.crop_width = crop_width
+        self.pad_value = pad_value
+
+    def __call__(self, image, boxes=None, labels=None):
+        image -= self.pad_value
+        image_height, image_width = image.shape[0], image.shape[1]
+        target_height = image_height + max(self.crop_height - image_height, 0)
+        target_width = image_width + max(self.crop_width - image_width, 0)
+
+        offset_height = (target_height - image_height) // 2
+        offset_width = (target_width - image_width) // 2
+
+        after_padding_width = target_width - offset_width - image_width
+        after_padding_height = target_height - offset_height - image_height
+
+        padded_im = np.zeros([target_height, target_width, 3], dtype=np.float32)
+        padded_im[offset_height:offset_height+image_height, offset_width:offset_width+image_width, :] = image
+        padded_im += self.pad_value
+
+        boxes[:, 0] += offset_width
+        boxes[:, 1] += offset_height
+        boxes[:, 2] += offset_width
+        boxes[:, 3] += offset_height
+
+        return padded_im, boxes, labels
+
+class SimpleCrop(object):
+    def __init__(self, crop_height=512, crop_width=512, center_crop=False):
+        self.crop_height = crop_height
+        self.crop_width = crop_width
+        self.center_crop = center_crop
+
+    def __call__(self, image, boxes=None, labels=None):
+        crop_height = self.crop_height
+        crop_width = self.crop_width
+        center_crop = self.center_crop
+        image_height, image_width = image.shape[0], image.shape[1]
+        max_offset_height = image_height - self.crop_height + 1
+        max_offset_width = image_width - self.crop_width + 1
+
+        if center_crop == True:
+          offset_height = (image_height - self.crop_height) / 2
+          offset_width = (image_width - self.crop_width) / 2
+        else:
+          offset_height = np.random.randint(low=0, high=max_offset_height, size=(1,))[0]
+          offset_width = np.random.randint(low=0, high=max_offset_width, size=(1,))[0]
+
+        cropped_im = image[offset_height:offset_height+crop_height, offset_width:offset_width+crop_width, :]
+
+        if boxes.shape[0] == 0:
+            return cropped_im, boxes, labels
+
+        ori_boxes = boxes.copy()
+        boxes[:, 0] = np.maximum(boxes[:, 0], offset_width)
+        boxes[:, 1] = np.maximum(boxes[:, 1], offset_height)
+        boxes[:, 2] = np.minimum(boxes[:, 2], offset_width+crop_width-1)
+        boxes[:, 3] = np.minimum(boxes[:, 3], offset_height+crop_height-1)
+
+        tovlp = bbox_overlaps(boxes.astype(np.float64), ori_boxes.astype(np.float64))
+        argmax_tovlp = tovlp.argmax(axis=1)
+        max_toplp = tovlp[np.arange(tovlp.shape[0]), argmax_tovlp]
+
+        labelRect = ori_boxes.copy()
+        labelRect[:,0] -= offset_width
+        labelRect[:,1] -= offset_height
+        labelRect[:,2] -= offset_width
+        labelRect[:,3] -= offset_height
+
+        labelRect[:,0] = np.minimum(crop_width-1, np.maximum(0, labelRect[:,0]))
+        labelRect[:,1] = np.minimum(crop_height-1, np.maximum(0, labelRect[:,1]))
+        labelRect[:,2] = np.minimum(crop_width-1, np.maximum(0, labelRect[:,2]))
+        labelRect[:,3] = np.minimum(crop_height-1, np.maximum(0, labelRect[:,3]))
+
+        invalid_idx = np.logical_or(labelRect[:, 2] <= labelRect[:, 0], labelRect[:, 3] <= labelRect[:, 1])
+        invalid_idx = np.logical_or(invalid_idx, max_toplp < 0.2)
+        invalid_idx = np.where(invalid_idx == True)
+        gt_boxes = np.delete(labelRect, invalid_idx[0], axis=0)
+        labels = np.delete(labels, invalid_idx[0], axis=0)
+
+        return cropped_im, gt_boxes, labels
+
+
+class FilterBoundingBox(object):
+    def __init__(self, bh=8, bw=8):
+        self.bh = bh
+        self.bw = bw
+
+    def __call__(self, image, boxes=None, labels=None):
+        num_boxes = boxes.shape[0]
+        valid_boxes = []
+        valid_labels = []
+        height, width = image.shape[0], image.shape[1]
+        for i in range(num_boxes):
+            box = boxes[i,:]
+            label = labels[i,:]
+            x1 = box[0]; y1 = box[1]; x2 = box[2]; y2 = box[3]
+            if x2 - x1 + 1 < self.bw or y2 - y1 + 1 < self.bh or x2 <= x1 or y2 <= y1 or x2 >= width or x1 >= width or x2 < 0 or x1 < 0 or y1 >= height or y2 >= height or y1 < 0 or y2 < 0:
+                continue
+            valid_boxes.append(box.tolist())
+            valid_labels.append(label.tolist())
+        return image, np.array(valid_boxes).astype(np.float32), np.array(valid_labels).astype(np.float32)
+
+class SimpleAugmentation(object):
+    def __init__(self):
+        self.augment = Compose([
+          ConvertFromInts(),
+          ToPercentCoords(),
+          RandomResize(0.5, 1.5),
+          ToAbsoluteCoords(),
+          PadToBoundingBox(),
+          FilterBoundingBox(),
+          SimpleCrop(),
+          FilterBoundingBox(),
+          RandomMirror(),
+          ToPercentCoords(),
+          SubtractMeans((128, 128, 128)),
+        ])
+
+    def __call__(self, img, boxes, labels):
+        return self.augment(img, boxes, labels)
+
+class SimpleTestAugmentation(object):
+    def __init__(self):
+        self.augment = Compose([
+          ConvertFromInts(),
+          ToPercentCoords(),
+          RandomResize(1.0, 1.0),
+          ToAbsoluteCoords(),
+          PadToBoundingBox(),
+          SimpleCrop(center_crop=True),
+          ToPercentCoords(),
+          SubtractMeans((128, 128, 128)),
+        ])
+    def __call__(self, img, boxes, labels):
+      return self.augment(img, boxes, labels)
 
 
 class SSDAugmentation(object):

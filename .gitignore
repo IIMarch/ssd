@@ -93,6 +93,7 @@ ENV/
 
 # weights
 weights/
+checkpoints/
 
 #DS_Store
 .DS_Store

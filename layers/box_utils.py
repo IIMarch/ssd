@@ -68,7 +68,7 @@ def jaccard(box_a, box_b):
     return inter / union  # [A,B]
 
 
-def match(threshold, truths, priors, variances, labels, loc_t, conf_t, idx):
+def match(threshold, truths, priors, variances, labels, loc_t, conf_t, idx, img_shape):
     """Match each prior box with the ground truth box of the highest jaccard
     overlap, encode the bounding boxes, then return the matched indices
     corresponding to both confidence and location preds.
@@ -86,10 +86,8 @@ def match(threshold, truths, priors, variances, labels, loc_t, conf_t, idx):
         The matched indices corresponding to 1)location and 2)confidence preds.
     """
     # jaccard index
-    overlaps = jaccard(
-        truths,
-        point_form(priors)
-    )
+    anchors = point_form(priors)
+    overlaps = jaccard(truths, anchors)
     # (Bipartite Matching)
     # [1,num_objects] best prior for each ground truth
     best_prior_overlap, best_prior_idx = overlaps.max(1, keepdim=True)
@@ -99,14 +97,33 @@ def match(threshold, truths, priors, variances, labels, loc_t, conf_t, idx):
     best_truth_overlap.squeeze_(0)
     best_prior_idx.squeeze_(1)
     best_prior_overlap.squeeze_(1)
-    best_truth_overlap.index_fill_(0, best_prior_idx, 2)  # ensure best prior
+    #best_truth_overlap.index_fill_(0, best_prior_idx, 2)  # ensure best prior
     # TODO refactor: index  best_prior_idx with long tensor
     # ensure every gt matches with its prior of max overlap
-    for j in range(best_prior_idx.size(0)):
-        best_truth_idx[best_prior_idx[j]] = j
+    #for j in range(best_prior_idx.size(0)):
+    #    best_truth_idx[best_prior_idx[j]] = j
+
+    height, width = img_shape[2], img_shape[3]
     matches = truths[best_truth_idx]          # Shape: [num_priors,4]
-    conf = labels[best_truth_idx] + 1         # Shape: [num_priors]
-    conf[best_truth_overlap < threshold] = 0  # label as background
+    area = torch.zeros_like(matches)
+    area[:,0] = matches[:, 0] * width
+    area[:,1] = matches[:, 1] * height
+    area[:,2] = matches[:, 2] * width
+    area[:,3] = matches[:, 3] * height
+    areas = (area[:,2] - area[:,0] + 1) * (area[:,3] - area[:,1] + 1)
+    conf = labels[best_truth_idx]         # Shape: [num_priors]
+
+    bg_chosen = torch.where(areas <= 144, best_truth_overlap < 0.3, best_truth_overlap < threshold)
+    conf[bg_chosen] = 0
+    fg_truth_boxid = best_truth_idx[1 - bg_chosen]
+    ones = torch.ones_like(best_prior_idx, dtype=torch.uint8)
+    ones[fg_truth_boxid] = 0
+    no_matchGT_prior = best_prior_idx[ones]
+    conf[no_matchGT_prior] = 1
+
+    #matches = truths[best_truth_idx]
+    #conf = labels[best_truth_idx]
+    #conf[best_truth_overlap < threshold] = 0  # label as background
     loc = encode(matches, priors, variances)
     loc_t[idx] = loc    # [num_priors,4] encoded offsets to learn
     conf_t[idx] = conf  # [num_priors] top class label for each prior
@@ -149,7 +166,6 @@ def decode(loc, priors, variances):
     Return:
         decoded bounding box predictions
     """
-
     boxes = torch.cat((
         priors[:, :2] + loc[:, :2] * variances[0] * priors[:, 2:],
         priors[:, 2:] * torch.exp(loc[:, 2:] * variances[1])), 1)
@@ -186,7 +202,7 @@ def nms(boxes, scores, overlap=0.5, top_k=200):
 
     keep = scores.new(scores.size(0)).zero_().long()
     if boxes.numel() == 0:
-        return keep
+        return keep, 0
     x1 = boxes[:, 0]
     y1 = boxes[:, 1]
     x2 = boxes[:, 2]

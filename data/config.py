@@ -13,8 +13,8 @@ MEANS = (104, 117, 123)
 # SSD300 CONFIGS
 voc = {
     'num_classes': 21,
-    'lr_steps': (80000, 100000, 120000),
-    'max_iter': 120000,
+    'lr_steps': (80000, 120000, 160000),
+    'max_iter': 200000,
     'feature_maps': [38, 19, 10, 5, 3, 1],
     'min_dim': 300,
     'steps': [8, 16, 32, 64, 100, 300],
@@ -39,4 +39,19 @@ coco = {
     'variance': [0.1, 0.2],
     'clip': True,
     'name': 'COCO',
+}
+
+widerface = {
+    'num_classes': 2,
+    'lr_steps': (80000, 120000, 160000),
+    'max_iter': 200000,
+    'input_shape': (512, 512),
+    'feature_maps': [(64,64), (32,32), (16,16), (8,8), (4,4)],
+    'steps': [8,16,32,64,128],
+    'min_sizes': [8,16,32,64,128],
+    'max_sizes': [16,32,64,128,256],
+    'aspect_ratios': [[1], [1,2,3], [1,2,3], [1,2,3], [1,2,3]],
+    'variance': [0.1, 0.2],
+    'clip': False,
+    'name': 'WIDER_FACE',
 }
