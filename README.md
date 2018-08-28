@@ -12,4 +12,11 @@ A [PyTorch](http://pytorch.org/) implementation of [Single Shot MultiBox Detecto
 <img align="left" src= "imgs/2.png">
 <img align="left" src= "imgs/3.png">
 
+
+
+## Training SSD on WiderFace
+
+For now read the train2.py, test2.py and eval2.py.
+
+
 Updating...
