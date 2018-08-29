@@ -127,3 +127,5 @@ data/ssd_dataloader.py
 
 # pylint
 .pylintrc
+
+/*.png

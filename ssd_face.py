@@ -127,7 +127,7 @@ extras = {
   'VGG_16_reduced': [256, 'S', 512, 128, 'S', 256, 128, 'S', 256],
 }
 mbox = {
-  'VGG_16_reduced': [2,6,6,6,6],
+  'VGG_16_reduced': [2,4,4,4,4],
 }
 
 def build_face_ssd(phase):

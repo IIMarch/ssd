@@ -50,7 +50,7 @@ widerface = {
     'steps': [8,16,32,64,128],
     'min_sizes': [8,16,32,64,128],
     'max_sizes': [16,32,64,128,256],
-    'aspect_ratios': [[1], [1,2,3], [1,2,3], [1,2,3], [1,2,3]],
+    'aspect_ratios': [[1], [1,2], [1,2], [1,2], [1,2]],
     'variance': [0.1, 0.2],
     'clip': False,
     'name': 'WIDER_FACE',
